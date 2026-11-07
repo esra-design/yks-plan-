@@ -1,0 +1,613 @@
+<script>
+(() => {
+  'use strict';
+
+  const START = '2026-11-09';
+  const STORAGE_KEY = 'dearStudentGitHub_v1';
+
+  const WEEKDAYS = ['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+  const $ = selector => document.querySelector(selector);
+  const dateKey = date =>
+    `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  const parseDate = key => new Date(`${key}T12:00:00`);
+  const daysBetween = (a,b) => Math.round((parseDate(b)-parseDate(a))/86400000);
+  const formatDate = (key,options={weekday:'long',day:'numeric',month:'long'}) =>
+    parseDate(key).toLocaleDateString('tr-TR',options);
+
+  const todayKey = dateKey(new Date());
+  let selectedDate = todayKey < START ? START : todayKey;
+  let editingTask = null;
+  let store = loadStore();
+
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            tasks: parsed.tasks || {},
+            exams: parsed.exams || [],
+            journal: parsed.journal || {},
+            focusMinutes: Number(parsed.focusMinutes) || 0,
+            targetDate: parsed.targetDate || '2027-06-20'
+          };
+        }
+      }
+    } catch(error) {
+      console.warn('Kayıtlı veriler okunamadı.',error);
+    }
+
+    return {
+      tasks:{},
+      exams:[],
+      journal:{},
+      focusMinutes:0,
+      targetDate:'2027-06-20'
+    };
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(store));
+    } catch(error) {
+      alert('Tarayıcı verileri kaydedemedi. Depolama alanını kontrol et.');
+      console.error(error);
+    }
+  }
+
+  function createDefaultTasks(key) {
+    const offset = daysBetween(START,key);
+    if (offset < 0) return [];
+
+    const tasks = [];
+
+    const addLesson = (id,title,course,lessonDay) => {
+      tasks.push({id,title,course,lessonDay,done:false});
+    };
+
+    const mathDay = 9 + offset;
+    if (mathDay <= 55) {
+      addLesson(
+        `tyt-mat-${mathDay}`,
+        `TYT Matematik · ${mathDay}. gün`,
+        'TYT Matematik',
+        mathDay
+      );
+    }
+
+    const geoDay = 1 + offset;
+    if (geoDay <= 58) {
+      addLesson(
+        `tyt-geo-${geoDay}`,
+        `TYT Geometri · ${geoDay}. gün`,
+        'TYT Geometri',
+        geoDay
+      );
+    }
+
+    const aytMathDay = 1 + offset;
+    if (aytMathDay <= 80) {
+      addLesson(
+        `ayt-mat-${aytMathDay}`,
+        `AYT Matematik · ${aytMathDay}. gün`,
+        'AYT Matematik',
+        aytMathDay
+      );
+    }
+
+    if (offset >= 47 && offset < 72) {
+      const literatureDay = offset - 46;
+      addLesson(
+        `ayt-edebiyat-${literatureDay}`,
+        `AYT Edebiyat · ${literatureDay}. gün`,
+        'AYT Edebiyat',
+        literatureDay
+      );
+    } else if (offset >= 72) {
+      const rotation = ['TYT Sosyal','AYT Sosyal','TYT Fen'];
+      const course = rotation[(offset-72)%rotation.length];
+
+      tasks.push({
+        id:`flex-${offset}`,
+        title:`${course} · konu çalışması`,
+        course,
+        done:false
+      });
+    }
+
+    tasks.push({
+      id:`paragraph-${key}`,
+      title:'Paragraf · 20 soru',
+      course:'Paragraf',
+      done:false
+    });
+
+    return tasks;
+  }
+
+  function getTasks(key) {
+    if (!Object.prototype.hasOwnProperty.call(store.tasks,key)) {
+      store.tasks[key] = createDefaultTasks(key);
+      save();
+    }
+    return store.tasks[key];
+  }
+
+  function currentWeekStart(key) {
+    const date = parseDate(key);
+    const mondayOffset = (date.getDay()+6)%7;
+    date.setDate(date.getDate()-mondayOffset);
+    return date;
+  }
+
+  function renderWeek() {
+    const monday = currentWeekStart(selectedDate);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate()+6);
+
+    $('#weekDays').innerHTML = '';
+
+    for(let i=0;i<7;i++) {
+      const date = new Date(monday);
+      date.setDate(monday.getDate()+i);
+      const key = dateKey(date);
+      const tasks = getTasks(key);
+
+      const button = document.createElement('button');
+      button.className =
+        'day' +
+        (key===selectedDate?' selected':'') +
+        (key===todayKey?' today':'') +
+        (tasks.length===0?' empty':'');
+
+      button.innerHTML =
+        `<small>${WEEKDAYS[i]}</small><b>${date.getDate()}</b><i></i>`;
+
+      button.setAttribute('aria-label',`${formatDate(key)} gününü aç`);
+      button.addEventListener('click',()=>{
+        selectedDate=key;
+        render();
+      });
+
+      $('#weekDays').append(button);
+    }
+
+    const sameMonth = monday.getMonth()===sunday.getMonth();
+
+    const range = sameMonth
+      ? `${monday.getDate()} — ${sunday.getDate()} ${sunday.toLocaleDateString('tr-TR',{month:'long',year:'numeric'})}`
+      : `${monday.toLocaleDateString('tr-TR',{day:'numeric',month:'short'})} — ${sunday.toLocaleDateString('tr-TR',{day:'numeric',month:'short',year:'numeric'})}`;
+
+    $('#weekRange').textContent=range;
+    $('#weekMonth').textContent =
+      monday.toLocaleDateString('tr-TR',{month:'long',year:'numeric'}).replace(' ',' · ');
+  }
+
+  function renderTasks() {
+    const tasks = getTasks(selectedDate);
+    const done = tasks.filter(task=>task.done).length;
+    const percent = tasks.length ? Math.round(done/tasks.length*100) : 0;
+
+    $('#dayHeading').textContent =
+      `${formatDate(selectedDate,{weekday:'long'})} çalışma listen`;
+
+    $('#daySub').textContent =
+      selectedDate < START
+        ? 'Program başlangıcından önceki gün.'
+        : 'Planın, tamamladığın her adımla ilerliyor.';
+
+    $('#taskCount').textContent=`${done} / ${tasks.length} tamamlandı`;
+    $('#progressPct').textContent=`${percent}%`;
+    $('#progressRing').style.setProperty('--progress',`${percent}%`);
+
+    const list=$('#taskList');
+    list.innerHTML='';
+
+    if (!tasks.length) {
+      const empty=document.createElement('div');
+      empty.className='notice';
+      empty.textContent='Bu gün için otomatik görev yok. İstersen aşağıdan kendi görevini ekleyebilirsin.';
+      list.append(empty);
+    }
+
+    tasks.forEach(task=>{
+      const row=document.createElement('div');
+      row.className='task'+(task.done?' done':'');
+
+      row.innerHTML=`
+        <input type="checkbox" aria-label="Görevi tamamla">
+        <div class="task-info">
+          <strong></strong>
+          <small></small>
+        </div>
+        <span class="tag"></span>
+        <div class="task-actions">
+          <button class="mini edit" title="Düzenle" aria-label="Görevi düzenle">✎</button>
+          <button class="mini delete" title="Sil" aria-label="Görevi sil">×</button>
+        </div>
+      `;
+
+      const check=row.querySelector('input');
+      check.checked=Boolean(task.done);
+
+      row.querySelector('strong').textContent=task.title;
+      row.querySelector('small').textContent=task.course||'Kişisel';
+
+      const tag=row.querySelector('.tag');
+
+      tag.textContent =
+        task.course==='TYT Matematik'?'TYT MAT':
+        task.course==='AYT Matematik'?'AYT MAT':
+        task.course==='TYT Geometri'?'GEOMETRİ':
+        task.course==='Paragraf'?'GÜNLÜK':
+        (task.course||'GÖREV').slice(0,11);
+
+      if (
+        task.course==='AYT Matematik' ||
+        task.course==='TYT Geometri'
+      ) {
+        tag.classList.add('gold');
+      }
+
+      check.addEventListener('change',()=>{
+        task.done=check.checked;
+        save();
+        render();
+      });
+
+      row.querySelector('.edit').addEventListener('click',()=>{
+        openEdit(task);
+      });
+
+      row.querySelector('.delete').addEventListener('click',()=>{
+        if (confirm('Bu görev silinsin mi?')) {
+          store.tasks[selectedDate]=tasks.filter(item=>item.id!==task.id);
+          save();
+          render();
+        }
+      });
+
+      list.append(row);
+    });
+
+    $('#rolloverNotice').textContent =
+      tasks.some(task=>!task.done)
+        ? 'Tamamlanmayan görevlerini başka güne kendin ekleyebilirsin. Tiklerin ve notların bu tarayıcıya kaydedilir.'
+        : 'Harika iş! Bugünün görevleri tamamlandı ve kaydedildi.';
+  }
+
+  function allTasks() {
+    return Object.values(store.tasks).flat();
+  }
+
+  function courseDoneCount(name,initial=0) {
+    return initial + allTasks().filter(task=>
+      task.course===name &&
+      task.done &&
+      Number.isFinite(task.lessonDay)
+    ).length;
+  }
+
+  function courseCard(name,total,initial=0,status='') {
+    const done=Math.min(total,courseDoneCount(name,initial));
+    const percent=Math.min(100,done/total*100);
+
+    return `
+      <div class="course">
+        <div>
+          <div class="course-title">${name}</div>
+          <div class="course-meta">
+            ${done} / ${total} gün tamamlandı${status?` · ${status}`:''}
+          </div>
+          <div class="bar">
+            <span style="width:${percent}%"></span>
+          </div>
+        </div>
+        <div class="course-count">${Math.round(percent)}%</div>
+      </div>
+    `;
+  }
+
+  function renderCourses() {
+    const offset=Math.max(0,daysBetween(START,selectedDate));
+    const items=[];
+
+    items.push(courseCard(
+      'TYT Matematik',
+      55,
+      8,
+      `program günü ${Math.min(55,9+offset)}`
+    ));
+
+    items.push(courseCard(
+      'TYT Geometri',
+      58,
+      0,
+      `program günü ${Math.min(58,1+offset)}`
+    ));
+
+    items.push(courseCard(
+      'AYT Matematik',
+      80,
+      0,
+      `program günü ${Math.min(80,1+offset)}`
+    ));
+
+    items.push(`
+      <div class="course">
+        <div>
+          <div class="course-title">Paragraf</div>
+          <div class="course-meta">
+            ${allTasks().filter(task=>task.course==='Paragraf'&&task.done).length*20}
+            soru tamamlandı · her gün 20 soru
+          </div>
+          <div class="bar"><span style="width:100%"></span></div>
+        </div>
+        <div class="course-count">Günlük</div>
+      </div>
+    `);
+
+    if (offset<47) {
+      items.push(`
+        <div class="course">
+          <div>
+            <div class="course-title">AYT Edebiyat</div>
+            <div class="course-meta">TYT Matematik tamamlandıktan sonra başlayacak</div>
+            <div class="bar"><span style="width:0%"></span></div>
+          </div>
+          <div class="course-count">Sırada</div>
+        </div>
+      `);
+    } else {
+      items.push(courseCard(
+        'AYT Edebiyat',
+        25,
+        0,
+        `program günü ${Math.min(25,offset-46)}`
+      ));
+    }
+
+    $('#courseList').innerHTML=items.join('');
+  }
+
+  function renderStats() {
+    const tasks=allTasks();
+    const completed=tasks.filter(task=>task.done);
+
+    $('#tasksDone').textContent=completed.length;
+
+    $('#studyDays').textContent=
+      Object.keys(store.tasks).filter(key=>
+        store.tasks[key].some(task=>task.done)
+      ).length;
+
+    $('#paragraphTotal').textContent=
+      completed.filter(task=>task.course==='Paragraf').length*20;
+
+    $('#focusTotal').textContent=`${store.focusMinutes} dk`;
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g,char=>({
+      '&':'&amp;',
+      '<':'&lt;',
+      '>':'&gt;',
+      '"':'&quot;',
+      "'":'&#39;'
+    }[char]));
+  }
+
+  function renderExams() {
+    $('#examResults').innerHTML = store.exams.length
+      ? store.exams.slice().reverse().map(exam=>`
+          <div class="exam-row">
+            <span>${escapeHtml(exam.name)} · ${escapeHtml(exam.date)}</span>
+            <span>${Number(exam.net).toLocaleString('tr-TR')} net</span>
+          </div>
+        `).join('')
+      : '<div class="exam-row"><span>Henüz sonuç yok</span><span>—</span></div>';
+  }
+
+  function renderCountdown() {
+    const target=store.targetDate
+      ? new Date(`${store.targetDate}T10:00:00`)
+      : null;
+
+    if (!target||Number.isNaN(target.getTime())) {
+      $('#countdown').innerHTML='<div class="notice">Önce bir hedef tarihi seç.</div>';
+      return;
+    }
+
+    const diff=Math.max(0,target-new Date());
+    const days=Math.floor(diff/86400000);
+    const hours=Math.floor(diff%86400000/3600000);
+    const minutes=Math.floor(diff%3600000/60000);
+
+    $('#countdown').innerHTML=[
+      [days,'GÜN'],
+      [hours,'SAAT'],
+      [minutes,'DAKİKA']
+    ].map(([value,label])=>`
+      <div class="timebox">
+        <b>${value}</b>
+        <small>${label}</small>
+      </div>
+    `).join('');
+  }
+
+  function render() {
+    renderWeek();
+    renderTasks();
+    renderCourses();
+    renderStats();
+    renderExams();
+    renderCountdown();
+
+    $('#journalText').value=store.journal[selectedDate]||'';
+
+    $('#todayText').textContent=
+      `${formatDate(selectedDate,{day:'numeric',month:'long',year:'numeric'})} · Yeni bir sayfa, yeni bir başlangıç.`;
+  }
+
+  function addTask() {
+    const input=$('#quickTask');
+    const title=input.value.trim();
+
+    if (!title) return;
+
+    getTasks(selectedDate).push({
+      id:`custom-${Date.now()}`,
+      title,
+      course:'Kişisel',
+      done:false
+    });
+
+    input.value='';
+    save();
+    render();
+  }
+
+  function openEdit(task) {
+    editingTask=task;
+    $('#editTitle').value=task.title;
+    $('#editCourse').value=task.course||'';
+    $('#editModal').classList.add('show');
+  }
+
+  $('#quickAdd').addEventListener('click',addTask);
+
+  $('#quickTask').addEventListener('keydown',event=>{
+    if(event.key==='Enter') addTask();
+  });
+
+  $('#addTaskTop').addEventListener('click',()=>{
+    $('#quickTask').focus();
+    $('#quickTask').scrollIntoView({
+      behavior:'smooth',
+      block:'center'
+    });
+  });
+
+  $('#prevWeek').addEventListener('click',()=>{
+    const date=parseDate(selectedDate);
+    date.setDate(date.getDate()-7);
+    selectedDate=dateKey(date);
+    render();
+  });
+
+  $('#nextWeek').addEventListener('click',()=>{
+    const date=parseDate(selectedDate);
+    date.setDate(date.getDate()+7);
+    selectedDate=dateKey(date);
+    render();
+  });
+
+  $('#todayBtn').addEventListener('click',()=>{
+    selectedDate=todayKey<START?START:todayKey;
+    render();
+  });
+
+  $('#saveJournal').addEventListener('click',()=>{
+    store.journal[selectedDate]=$('#journalText').value;
+    save();
+    $('#journalStatus').textContent='Az önce kaydedildi ✓';
+  });
+
+  $('#saveEdit').addEventListener('click',()=>{
+    if(editingTask) {
+      editingTask.title=$('#editTitle').value.trim()||editingTask.title;
+      editingTask.course=$('#editCourse').value.trim()||'Kişisel';
+      save();
+      render();
+    }
+
+    $('#editModal').classList.remove('show');
+    editingTask=null;
+  });
+
+  $('#cancelEdit').addEventListener('click',()=>{
+    $('#editModal').classList.remove('show');
+    editingTask=null;
+  });
+
+  $('#editModal').addEventListener('click',event=>{
+    if(event.target.id==='editModal') {
+      $('#editModal').classList.remove('show');
+      editingTask=null;
+    }
+  });
+
+  $('#addExam').addEventListener('click',()=>{
+    const name=$('#examName').value.trim();
+    const date=$('#examDate').value;
+    const net=$('#examNet').value;
+
+    if(!name||!date||net==='') {
+      alert('Lütfen deneme adını, tarihi ve netini gir.');
+      return;
+    }
+
+    store.exams.push({
+      name,
+      date,
+      net:Number(net)
+    });
+
+    save();
+
+    $('#examName').value='';
+    $('#examDate').value='';
+    $('#examNet').value='';
+
+    renderExams();
+  });
+
+  $('#targetDate').value=store.targetDate;
+
+  $('#saveTarget').addEventListener('click',()=>{
+    const value=$('#targetDate').value;
+
+    if(!value) {
+      alert('Lütfen bir tarih seç.');
+      return;
+    }
+
+    store.targetDate=value;
+    save();
+    renderCountdown();
+  });
+
+  $('#resetBtn').addEventListener('click',()=>{
+    if(confirm('Bu tarayıcıdaki Dear Student görevleri, notları ve deneme kayıtları sıfırlanacak. Devam edilsin mi?')) {
+      localStorage.removeItem(STORAGE_KEY);
+      location.reload();
+    }
+  });
+
+  document.querySelectorAll('[data-scroll]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      document.getElementById(button.dataset.scroll).scrollIntoView({
+        behavior:'smooth'
+      });
+
+      document.querySelectorAll('.nav button').forEach(item=>{
+        item.classList.toggle(
+          'active',
+          item.dataset.scroll===button.dataset.scroll
+        );
+      });
+    });
+  });
+
+  document.querySelectorAll('.hero-photo,.photo img').forEach(image=>{
+    image.addEventListener('error',()=>{
+      image.parentElement.classList.add('failed');
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
